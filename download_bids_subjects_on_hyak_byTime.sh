@@ -25,10 +25,12 @@ IMAGE="${IMAGE:-/gscratch/fang/images/flywheel.sif}"
 BIND_SRC="${BIND_SRC:-/gscratch/scrubbed/fanglab/xiaoqian/IFOCUS/sourcedata/dicom}"
 BIND_DEST="${BIND_DEST:-/DATA_DIR}"
 PROJECT_PATH="${PROJECT_PATH:-fang-lab/IFOCUS}"
+TARGET_SUBJECT="${TARGET_SUBJECT:-105}"
 START_DATE="${START_DATE:-2024-10-07}"
 LIST_ONLY="${LIST_ONLY:-1}"
 JOBS="${JOBS:-1}"
-MANIFEST="${MANIFEST:-${BIND_DEST}/sessions_since_${START_DATE}.csv}"
+MANIFEST_NAME="sessions_${TARGET_SUBJECT:-all}_since_${START_DATE}.csv"
+MANIFEST="${MANIFEST:-${BIND_DEST}/${MANIFEST_NAME}}"
 INSTALL_SDK="${INSTALL_SDK:-1}"
 EXTRACT_AFTER="${EXTRACT_AFTER:-1}"
 KEEP_TARS="${KEEP_TARS:-1}"
@@ -75,7 +77,7 @@ apptainer exec \
     --env FW_HOST="${FW_HOST:-}" \
     -B "${BIND_SRC}:${BIND_DEST}" \
     "${IMAGE}" \
-    bash -s -- "${START_DATE}" "${LIST_ONLY}" "${MANIFEST}" "${PROJECT_PATH}" "${BIND_DEST}" "${JOBS}" "${INSTALL_SDK}" "${EXTRACT_AFTER}" "${KEEP_TARS}" "${RUN_FW_LOGIN}" "${DOWNLOAD_MODE}" <<'CONTAINER_SCRIPT'
+    bash -s -- "${START_DATE}" "${LIST_ONLY}" "${MANIFEST}" "${PROJECT_PATH}" "${BIND_DEST}" "${JOBS}" "${INSTALL_SDK}" "${EXTRACT_AFTER}" "${KEEP_TARS}" "${RUN_FW_LOGIN}" "${DOWNLOAD_MODE}" "${TARGET_SUBJECT}" <<'CONTAINER_SCRIPT'
 set -euo pipefail
 
 START_DATE="$1"
@@ -89,6 +91,7 @@ EXTRACT_AFTER="$8"
 KEEP_TARS="$9"
 RUN_FW_LOGIN="${10}"
 DOWNLOAD_MODE="${11}"
+TARGET_SUBJECT="${12}"
 
 FLYWHEEL_SDK_TARGET="${FLYWHEEL_SDK_TARGET:-${BIND_DEST}/.flywheel-sdk-python}"
 export PYTHONNOUSERSITE=1
@@ -171,7 +174,7 @@ MSG
     fi
 fi
 
-python3 - "$START_DATE" "$MANIFEST" "$PROJECT_PATH" <<'PY'
+python3 - "$START_DATE" "$MANIFEST" "$PROJECT_PATH" "$TARGET_SUBJECT" <<'PY'
 import csv
 from datetime import date, datetime
 import os
@@ -186,7 +189,7 @@ if not hasattr(flywheel, "Client"):
         f"version={getattr(flywheel, '__version__', '<unknown>')}"
     )
 
-start_date, manifest, project_path = sys.argv[1:4]
+start_date, manifest, project_path, target_subject = sys.argv[1:5]
 start_day = date.fromisoformat(start_date)
 
 fw = flywheel.Client(os.environ["FW_KEY"])
@@ -206,29 +209,61 @@ def timestamp_date(value):
     return None
 
 rows = []
-for session in project.sessions.iter_find():
-    session_day = timestamp_date(getattr(session, "timestamp", None))
-    if session_day is None or session_day < start_day:
-        continue
+# Fetch target subject directly if supplied, otherwise iterate whole project
+if target_subject:
+    subject_path = f"{project_path}/{target_subject}"
+    try:
+        subject_obj = fw.lookup(subject_path)
+        subject_sessions = list(subject_obj.sessions.iter_find())
+    except Exception as exc:
+        print(f"Warning: Could not lookup subject path '{subject_path}': {exc}", file=sys.stderr)
+        subject_sessions = []
 
-    full_session = fw.get(session.id)
-    subject_id = full_session.parents.subject
-    subject = fw.get(subject_id) if subject_id else None
-    timestamp = getattr(full_session, "timestamp", "") or ""
+    for session in subject_sessions:
+        session_day = timestamp_date(getattr(session, "timestamp", None))
+        if session_day is not None and session_day < start_day:
+            continue
 
-    rows.append(
-        {
-            "subject_label": getattr(subject, "label", "") if subject else "",
-            "session_label": getattr(full_session, "label", ""),
-            "session_id": full_session.id,
-            "timestamp": str(timestamp),
-            "download_path": (
-                f"{project_path}/"
-                f"{getattr(subject, 'label', '')}/"
-                f"{getattr(full_session, 'label', '')}"
-            ),
-        }
-    )
+        full_session = fw.get(session.id)
+        timestamp = getattr(full_session, "timestamp", "") or ""
+        rows.append(
+            {
+                "subject_label": target_subject,
+                "session_label": getattr(full_session, "label", ""),
+                "session_id": full_session.id,
+                "timestamp": str(timestamp),
+                "download_path": (
+                    f"{project_path}/"
+                    f"{target_subject}/"
+                    f"{getattr(full_session, 'label', '')}"
+                ),
+            }
+        )
+else:
+    for session in project.sessions.iter_find():
+        session_day = timestamp_date(getattr(session, "timestamp", None))
+        if session_day is None or session_day < start_day:
+            continue
+
+        full_session = fw.get(session.id)
+        subject_id = full_session.parents.subject
+        subject = fw.get(subject_id) if subject_id else None
+        subj_label = getattr(subject, "label", "") if subject else ""
+        timestamp = getattr(full_session, "timestamp", "") or ""
+
+        rows.append(
+            {
+                "subject_label": subj_label,
+                "session_label": getattr(full_session, "label", ""),
+                "session_id": full_session.id,
+                "timestamp": str(timestamp),
+                "download_path": (
+                    f"{project_path}/"
+                    f"{subj_label}/"
+                    f"{getattr(full_session, 'label', '')}"
+                ),
+            }
+        )
 
 rows.sort(key=lambda row: (row["timestamp"], row["subject_label"], row["session_label"]))
 os.makedirs(os.path.dirname(manifest), exist_ok=True)
