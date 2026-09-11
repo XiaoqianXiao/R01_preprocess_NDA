@@ -25,6 +25,8 @@ set -euo pipefail
 #   - Subject IDs must match the Flywheel subject label exactly.
 #   - Omit the subject ID to include all subjects; START_DATE still applies.
 #   - TARGET_SUBJECT remains supported; --subID overrides environment settings.
+#   - Missing Slurm directories are excluded from Apptainer system binds so
+#     downloads can run on login nodes without those directories.
 
 usage() {
     cat <<'USAGE'
@@ -118,7 +120,17 @@ if [[ "${DOWNLOAD_MODE}" != "files" && "${DOWNLOAD_MODE}" != "tar" ]]; then
     exit 1
 fi
 
-apptainer exec \
+# Hyak may configure Slurm system binds that only exist on compute nodes.
+# This downloader does not need Slurm; disable missing binds individually.
+apptainer_command=(apptainer exec)
+for slurm_path in /var/run/slurm /var/spool/slurmd; do
+    if [[ ! -e "${slurm_path}" ]]; then
+        echo "Skipping missing Slurm system bind: ${slurm_path}"
+        apptainer_command+=(--no-mount "${slurm_path}")
+    fi
+done
+
+"${apptainer_command[@]}" \
     --env FW_KEY="${FW_KEY}" \
     --env FW_HOST="${FW_HOST:-}" \
     -B "${BIND_SRC}:${BIND_DEST}" \
