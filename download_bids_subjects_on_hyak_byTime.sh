@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Download Flywheel DICOM sessions by session timestamp.
+# Download Flywheel DICOM sessions by session timestamp and optional subject ID.
 #
 # Usage:
 #   export FW_KEY='...'
 #   START_DATE=2026-06-22 LIST_ONLY=1 ./download_bids_subjects_on_hyak_byTime.sh
 #   START_DATE=2026-06-22 LIST_ONLY=0 ./download_bids_subjects_on_hyak_byTime.sh
+#   LIST_ONLY=1 ./download_bids_subjects_on_hyak_byTime.sh --subID 105
+#   START_DATE=2024-10-07 LIST_ONLY=0 ./download_bids_subjects_on_hyak_byTime.sh --subID 105
+#   SUBID=105 LIST_ONLY=0 ./download_bids_subjects_on_hyak_byTime.sh
 #   EXTRACT_AFTER=1 KEEP_TARS=1 LIST_ONLY=0 ./download_bids_subjects_on_hyak_byTime.sh
 #
 # If the Apptainer image does not already include the Flywheel Python SDK,
@@ -19,13 +22,56 @@ set -euo pipefail
 #   - This script first queries sessions by date, writes a CSV manifest, then
 #     downloads each matching session file-by-file using the Flywheel Python SDK.
 #   - Set DOWNLOAD_MODE=tar only if you specifically want to use fw download.
+#   - Subject IDs must match the Flywheel subject label exactly.
+#   - Omit the subject ID to include all subjects; START_DATE still applies.
+#   - TARGET_SUBJECT remains supported; --subID overrides environment settings.
+
+usage() {
+    cat <<'USAGE'
+Usage: download_bids_subjects_on_hyak_byTime.sh [--subID SUBJECT_ID]
+
+  --subID, --sub-id SUBJECT_ID  Select an exact Flywheel subject label.
+  -h, --help                  Show this help.
+
+Environment:
+  SUBID / TARGET_SUBJECT      Optional subject label (SUBID takes precedence).
+  START_DATE                  Earliest session date (default: 2024-10-07).
+  LIST_ONLY                   1: write manifest only (default); 0: download.
+  FW_KEY                      Flywheel API key (required).
+
+Without a subject selection, all subjects are queried. The date filter applies
+to both subject-specific and project-wide queries.
+USAGE
+}
+
+TARGET_SUBJECT="${SUBID-${TARGET_SUBJECT:-}}"
+while (( $# > 0 )); do
+    case "$1" in
+        --subID|--sub-id)
+            if (( $# < 2 )) || [[ -z "$2" || "$2" == -* ]]; then
+                echo "Error: $1 requires a subject ID." >&2
+                exit 1
+            fi
+            TARGET_SUBJECT="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Error: Unknown argument: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
 
 IMAGE="${IMAGE:-/gscratch/fang/images/flywheel.sif}"
 #BIND_SRC="${BIND_SRC:-/gscratch/fang/IFOCUS/sourcedata/MRI}"
 BIND_SRC="${BIND_SRC:-/gscratch/scrubbed/fanglab/xiaoqian/IFOCUS/sourcedata/dicom}"
 BIND_DEST="${BIND_DEST:-/DATA_DIR}"
 PROJECT_PATH="${PROJECT_PATH:-fang-lab/IFOCUS}"
-TARGET_SUBJECT="${TARGET_SUBJECT:-105}"
 START_DATE="${START_DATE:-2024-10-07}"
 LIST_ONLY="${LIST_ONLY:-1}"
 JOBS="${JOBS:-1}"
@@ -216,12 +262,11 @@ if target_subject:
         subject_obj = fw.lookup(subject_path)
         subject_sessions = list(subject_obj.sessions.iter_find())
     except Exception as exc:
-        print(f"Warning: Could not lookup subject path '{subject_path}': {exc}", file=sys.stderr)
-        subject_sessions = []
+        raise SystemExit(f"Error: Could not lookup subject path '{subject_path}': {exc}")
 
     for session in subject_sessions:
         session_day = timestamp_date(getattr(session, "timestamp", None))
-        if session_day is not None and session_day < start_day:
+        if session_day is None or session_day < start_day:
             continue
 
         full_session = fw.get(session.id)
