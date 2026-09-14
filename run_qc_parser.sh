@@ -15,8 +15,18 @@ set -euo pipefail
 # Path to your generated SIF file
 CONTAINER_SIF="/gscratch/fang/images/python.sif"
 
-# Path to your Python script
-PYTHON_SCRIPT="/gscratch/scrubbed/fanglab/xiaoqian/repo/R01_preprocess/generate_QCsheets.py"
+# Locate the parser beside this launcher. Slurm runs a spooled copy of the
+# launcher, so sbatch users should submit from the repository directory or
+# provide PYTHON_SCRIPT explicitly.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_SCRIPT="${PYTHON_SCRIPT:-${SLURM_SUBMIT_DIR:-$SCRIPT_DIR}/generate_QCsheets.py}"
+if [[ ! -f "$PYTHON_SCRIPT" ]]; then
+    echo "ERROR: Parser not found: $PYTHON_SCRIPT" >&2
+    echo "Set PYTHON_SCRIPT to the full path of generate_QCsheets.py." >&2
+    exit 1
+fi
+PARSER_DIR="$(cd -- "$(dirname -- "$PYTHON_SCRIPT")" && pwd)"
+PYTHON_SCRIPT="$PARSER_DIR/$(basename -- "$PYTHON_SCRIPT")"
 
 # --- Execution ---
 module load apptainer 2>/dev/null || true
@@ -37,6 +47,7 @@ done
 
 "${apptainer_command[@]}" \
     --bind /gscratch/scrubbed/fanglab/xiaoqian:/gscratch/scrubbed/fanglab/xiaoqian \
+    --bind "$PARSER_DIR:$PARSER_DIR:ro" \
     "$CONTAINER_SIF" \
     python "$PYTHON_SCRIPT"
 
