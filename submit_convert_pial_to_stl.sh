@@ -14,7 +14,7 @@
 TARGET_SUBJ="_"
 CONTAINER_SIF="/gscratch/fang/images/freesurfer.sif"
 LICENSE_FILE="/mmfs1/home/xxqian/files/fs_license.txt"
-DERIVS_DIR="/gscratch/scrubbed/fanglab/xiaoqian/IFOCUS/derivatives/freesurfer/sub-154_ses-baseline/surf"
+DERIVS_DIR="/gscratch/scrubbed/fanglab/xiaoqian/IFOCUS/derivatives/freesurfer/sub-144_ses-baseline/surf"
 
 module load apptainer 2>/dev/null || true
 
